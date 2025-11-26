@@ -778,5 +778,280 @@ spec:
    kubectl exec volume-test -- ls -ld /data
    # Output should show user/group as 2000
    \`\`\``
+  },
+  {
+    id: 'k8s-hpa',
+    title: 'Kubernetes HPA CPU Scaling',
+    description: 'Implement Horizontal Pod Autoscaler based on CPU usage.',
+    statement: `Implement HPA for CPU Scaling.
+
+Tasks:
+1. Create a Deployment 'php-apache' requesting 200m CPU.
+2. Create an HPA resource that:
+   - Targets the 'php-apache' deployment.
+   - Scales between 1 and 10 replicas.
+   - Triggers scaling when CPU utilization hits 50%.`,
+    solution: {
+      'deployment.yaml': `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: php-apache
+spec:
+  selector:
+    matchLabels:
+      run: php-apache
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        run: php-apache
+    spec:
+      containers:
+      - name: php-apache
+        image: k8s.gcr.io/hpa-example
+        ports:
+        - containerPort: 80
+        resources:
+          limits:
+            cpu: 500m
+          requests:
+            cpu: 200m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: php-apache
+  labels:
+    run: php-apache
+spec:
+  ports:
+  - port: 80
+  selector:
+    run: php-apache`,
+      'hpa.yaml': `apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: php-apache
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: php-apache
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 50`
+    },
+    explanation: 'The Horizontal Pod Autoscaler automatically scales the number of pods in a replication controller, deployment, replica set or stateful set based on observed CPU utilization. Here, we define a target of 50% CPU utilization. If the average CPU usage across all pods exceeds this, K8s will add more replicas up to 10.',
+    howToRun: `1. Apply deployment and service:
+   \`\`\`bash
+   kubectl apply -f deployment.yaml
+   \`\`\`
+2. Apply HPA:
+   \`\`\`bash
+   kubectl apply -f hpa.yaml
+   \`\`\`
+3. Generate load (in another terminal):
+   \`\`\`bash
+   kubectl run -i --tty load-generator --image=busybox /bin/sh
+   # Inside container:
+   while true; do wget -q -O- http://php-apache; done
+   \`\`\`
+4. Watch scaling:
+   \`\`\`bash
+   kubectl get hpa -w
+   \`\`\``
+  },
+  {
+    id: 'docker-multistage',
+    title: 'Docker Multi-Stage Build',
+    description: 'Optimize Go App Image Size using multi-stage builds.',
+    statement: `Optimize Go App Image Size.
+
+Tasks:
+1. Create a simple Go 'Hello World' app (main.go).
+2. Create a Dockerfile with 2 stages:
+   - Stage 1 (Builder): Use 'golang:1.21' to build the binary.
+   - Stage 2 (Final): Use 'alpine:latest', copy ONLY the binary from Stage 1.
+3. Resulting image should be small (< 20MB).`,
+    solution: {
+      'main.go': `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("Hello, World!")
+}`,
+      'Dockerfile': `# Stage 1: Builder
+FROM golang:1.21 AS builder
+WORKDIR /app
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o myapp .
+
+# Stage 2: Final Image
+FROM alpine:latest
+WORKDIR /root/
+COPY --from=builder /app/myapp .
+CMD ["./myapp"]`
+    },
+    explanation: 'Multi-stage builds allow you to drastically reduce the size of your final Docker image. The first stage contains all the build tools (Go compiler, etc.) needed to create the binary. The second stage is a minimal runtime environment (Alpine Linux) where we copy only the compiled binary. This discards all the build artifacts and tools, resulting in a secure and lightweight image.',
+    howToRun: `1. Build the image:
+   \`\`\`bash
+   docker build -t go-app .
+   \`\`\`
+2. Check size:
+   \`\`\`bash
+   docker images | grep go-app
+   \`\`\`
+3. Run it:
+   \`\`\`bash
+   docker run --rm go-app
+   \`\`\``
+  },
+  {
+    id: 'ansible-nginx-role',
+    title: 'Ansible Nginx Role',
+    description: 'Create a reusable Ansible Role to configure Nginx.',
+    statement: `Create Nginx Ansible Role.
+
+Tasks:
+1. Create a role structure 'roles/nginx'.
+2. In 'tasks/main.yml':
+   - Install Nginx.
+   - Start and enable Nginx service.
+   - Deploy 'index.html' from template.
+3. Create playbook 'site.yml' to use the role.`,
+    solution: {
+      'site.yml': `---
+- hosts: web
+  become: yes
+  roles:
+    - nginx`,
+      'roles/nginx/tasks/main.yml': `---
+- name: Install Nginx
+  yum:
+    name: nginx
+    state: present
+
+- name: Start Nginx
+  service:
+    name: nginx
+    state: started
+    enabled: yes
+
+- name: Deploy index.html
+  template:
+    src: index.html.j2
+    dest: /usr/share/nginx/html/index.html
+  notify: Restart Nginx`,
+      'roles/nginx/templates/index.html.j2': `<h1>Hello from {{ ansible_hostname }}</h1>
+<p>Managed by Ansible Role</p>`
+    },
+    explanation: 'Ansible Roles allow you to organize your automation into reusable units. This role encapsulates all the tasks and templates needed to set up Nginx. The `site.yml` playbook simply calls this role, making the top-level configuration clean and readable.',
+    howToRun: `1. Run the playbook (assuming 'web' host is configured):
+   \`\`\`bash
+   ansible-playbook -i inventory site.yml
+   \`\`\`
+   (Note: You need a valid inventory file and target host)`
+  },
+  {
+    id: 'terraform-s3-module',
+    title: 'Terraform S3 Module',
+    description: 'Create a reusable Terraform module for S3 buckets.',
+    statement: `Create Reusable S3 Terraform Module.
+
+Tasks:
+1. Create module structure 'modules/s3'.
+2. In the module, define:
+   - S3 bucket resource.
+   - Versioning configuration (enabled).
+   - Variable 'bucket_name'.
+3. In root 'main.tf', call the module to create a bucket.`,
+    solution: {
+      'modules/s3/variables.tf': `variable "bucket_name" {
+  description = "Name of the S3 bucket"
+  type        = string
+}`,
+      'modules/s3/main.tf': `resource "aws_s3_bucket" "this" {
+  bucket = var.bucket_name
+}
+
+resource "aws_s3_bucket_versioning" "versioning" {
+  bucket = aws_s3_bucket.this.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}`,
+      'main.tf': `provider "aws" {
+  region = "us-east-1"
+}
+
+module "my_bucket" {
+  source      = "./modules/s3"
+  bucket_name = "my-unique-bucket-name-12345"
+}`
+    },
+    explanation: 'Modules are the primary way to package and reuse resource configurations in Terraform. By creating a dedicated S3 module, we can enforce standards (like always enabling versioning) and easily create multiple consistent buckets by simply calling the module with different parameters.',
+    howToRun: `1. Initialize Terraform:
+   \`\`\`bash
+   terraform init
+   \`\`\`
+2. Plan the deployment:
+   \`\`\`bash
+   terraform plan
+   \`\`\`
+3. Apply:
+   \`\`\`bash
+   terraform apply
+   \`\`\``
+  },
+  {
+    id: 'k8s-ingress',
+    title: 'Kubernetes Ingress Routing',
+    description: 'Configure Path-Based Ingress Routing.',
+    statement: `Path-Based Ingress Routing.
+
+Tasks:
+1. Create an Ingress resource 'simple-fanout-example'.
+2. Define rules for host 'foo.bar.com':
+   - Path '/foo' -> service1:4200
+   - Path '/bar' -> service2:8080
+3. Use 'Prefix' path type.`,
+    solution: {
+      'ingress.yaml': `apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: simple-fanout-example
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+  - host: foo.bar.com
+    http:
+      paths:
+      - path: /foo
+        pathType: Prefix
+        backend:
+          service:
+            name: service1
+            port:
+              number: 4200
+      - path: /bar
+        pathType: Prefix
+        backend:
+          service:
+            name: service2
+            port:
+              number: 8080`
+    },
+    explanation: 'Ingress exposes HTTP and HTTPS routes from outside the cluster to services within the cluster. Traffic routing is controlled by rules defined on the Ingress resource. This example demonstrates "fanout" routing, where a single IP address (and host) routes traffic to different services based on the requested URL path.',
+    howToRun: `1. Apply the ingress:
+   \`\`\`bash
+   kubectl apply -f ingress.yaml
+   \`\`\`
+2. Verify:
+   \`\`\`bash
+   kubectl get ingress
+   \`\`\`
+   (Note: You need an Ingress Controller like Nginx installed in your cluster for this to work)`
   }
 ];
