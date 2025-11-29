@@ -2049,5 +2049,244 @@ spec:
    kubectl get ingress
    \`\`\`
    (Note: You need an Ingress Controller like Nginx installed in your cluster for this to work)`
+  },
+  {
+    id: 'flask-ec2-terraform',
+    title: 'Flask App Deployment to EC2 with Terraform (ECR)',
+    description: 'Build Docker image, push to ECR, and deploy to EC2 using Terraform and LocalStack.',
+    statement: `# Flask App Deployment on LocalStack with Terraform (ECR)
+
+This project demonstrates how to deploy a Dockerized Flask application to an AWS EC2 instance using Terraform, simulating the environment locally with LocalStack.
+
+## Architecture
+
+The architecture includes an AWS ECR repository for storing Docker images.
+
+1.  **Build & Push**: Terraform \`local-exec\` builds the Docker image locally and pushes it to the LocalStack ECR repository.
+2.  **Provision**: Terraform provisions an EC2 instance with an IAM role allowing ECR access.
+3.  **Deploy**: The EC2 instance \`user_data\` pulls the image from ECR and runs it.
+
+![Architecture Diagram](architecture.png)
+
+## Prerequisites
+
+- [Docker](https://www.docker.com/)
+- [Terraform](https://www.terraform.io/)
+- [AWS CLI](https://aws.amazon.com/cli/)
+- \`awslocal\` (optional)
+
+## Project Structure
+
+- \`app.py\`: Simple Flask application.
+- \`Dockerfile\`: Docker configuration (runs as non-root user).
+- \`main.tf\`: Terraform configuration for ECR, IAM, EC2, SG, and Key Pair.
+- \`provider.tf\`: Terraform AWS provider configured for LocalStack.
+
+## How to Run
+
+### 1. Start LocalStack
+
+\`\`\`bash
+docker run -d --rm -p 4566:4566 -p 4510-4559:4510-4559 -v /var/run/docker.sock:/var/run/docker.sock --name localstack-main localstack/localstack
+\`\`\`
+
+### 2. Initialize Terraform
+
+\`\`\`bash
+terraform init
+\`\`\`
+
+### 3. Deploy Infrastructure
+
+\`\`\`bash
+terraform apply
+\`\`\`
+
+### 4. Verify Deployment
+
+Terraform will output the \`app_url\` and \`ecr_repository_url\`.
+
+\`\`\`bash
+# Verify ECR repository
+docker exec localstack-main awslocal ecr describe-repositories
+\`\`\`
+
+### 5. Clean Up
+
+\`\`\`bash
+terraform destroy
+\`\`\``,
+    solution: {
+      'app.py': `from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/')
+def hello():
+    return 'Hello, World!'
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)`,
+      'Dockerfile': `FROM python:3.9-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py .
+
+# Create a non-root user and switch to it
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 5000
+
+CMD ["python", "app.py"]`,
+      'provider.tf': `terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 4.0"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
+  }
+}
+
+provider "aws" {
+  region                      = "us-east-1"
+  access_key                  = "test"
+  secret_key                  = "test"
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+
+  endpoints {
+    ec2 = "http://localhost:4566"
+  }
+}`,
+      'main.tf': `resource "aws_security_group" "flask_sg" {
+  name        = "flask_sg"
+  description = "Allow HTTP and SSH traffic"
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 5000
+    to_port     = 5000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# ECR Repository
+resource "aws_ecr_repository" "flask_app_repo" {
+  name                 = "flask-app-repo"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+}
+
+# IAM Role for EC2 to access ECR
+resource "aws_iam_role" "ec2_ecr_role" {
+  name = "ec2_ecr_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecr_read_only" {
+  role       = aws_iam_role.ec2_ecr_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "ec2_profile"
+  role = aws_iam_role.ec2_ecr_role.name
+}
+
+# Build and Push Docker Image
+resource "null_resource" "docker_build_push" {
+  triggers = {
+    always_run = "\${timestamp()}"
+  }
+
+  provisioner "local-exec" {
+    command = <<EOF
+      docker run --rm -e AWS_ACCESS_KEY_ID=test -e AWS_SECRET_ACCESS_KEY=test amazon/aws-cli --endpoint-url=http://host.docker.internal:4566 ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin \${aws_ecr_repository.flask_app_repo.repository_url}
+      docker build -t \${aws_ecr_repository.flask_app_repo.repository_url}:latest .
+      docker push \${aws_ecr_repository.flask_app_repo.repository_url}:latest
+    EOF
+  }
+}
+
+resource "aws_instance" "app_server" {
+  ami                  = "ami-0cff7528ff583bf9a"
+  instance_type        = "t2.micro"
+  security_groups      = [aws_security_group.flask_sg.name]
+  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
+
+  depends_on = [null_resource.docker_build_push]
+
+  user_data = <<EOF
+#!/bin/bash
+sudo yum update -y
+sudo amazon-linux-extras install docker -y
+sudo service docker start
+sudo usermod -a -G docker ec2-user
+aws --endpoint-url=http://localhost:4566 ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin \${aws_ecr_repository.flask_app_repo.repository_url}
+docker pull \${aws_ecr_repository.flask_app_repo.repository_url}:latest
+docker run -d -p 5000:5000 \${aws_ecr_repository.flask_app_repo.repository_url}:latest
+EOF
+
+  tags = {
+    Name = "FlaskEC2Instance"
+  }
+}`,
+      'outputs.tf': `output "app_url" {
+  value = "http://\${aws_instance.app_server.public_ip}:5000"
+}
+
+output "ecr_repository_url" {
+  value = aws_ecr_repository.flask_app_repo.repository_url
+}`
+    },
+    explanation: 'This solution uses Terraform to provision an ECR repository and an EC2 instance on LocalStack. It uses `local-exec` to build and push the Docker image to ECR. The EC2 instance is configured with an IAM role to pull the image from ECR and run it using `user_data`.',
+    howToRun: `1. Start LocalStack:
+   \`\`\`bash
+   docker run -d --rm -p 4566:4566 -p 4510-4559:4510-4559 -v /var/run/docker.sock:/var/run/docker.sock --name localstack-main localstack/localstack
+   \`\`\`
+2. Initialize Terraform:
+   \`\`\`bash
+   terraform init
+   \`\`\`
+3. Apply Configuration:
+   \`\`\`bash
+   terraform apply
+   \`\`\``
   }
 ];
