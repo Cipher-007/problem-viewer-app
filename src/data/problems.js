@@ -2168,40 +2168,7 @@ provider "aws" {
     ec2 = "http://localhost:4566"
   }
 }`,
-      'main.tf': `resource "aws_security_group" "flask_sg" {
-  name        = "flask_sg"
-  description = "Allow HTTP and SSH traffic"
-
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    from_port   = 5000
-    to_port     = 5000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-# ECR Repository
-resource "aws_ecr_repository" "flask_app_repo" {
-  name                 = "flask-app-repo"
-  image_tag_mutability = "MUTABLE"
-  force_delete         = true
-}
-
-# IAM Role for EC2 to access ECR
+      'main.tf': `# 1. IAM Role for EC2 to access ECR
 resource "aws_iam_role" "ec2_ecr_role" {
   name = "ec2_ecr_role"
 
@@ -2229,7 +2196,41 @@ resource "aws_iam_instance_profile" "ec2_profile" {
   role = aws_iam_role.ec2_ecr_role.name
 }
 
-# Build and Push Docker Image
+# 2. ECR Repository
+resource "aws_ecr_repository" "flask_app_repo" {
+  name                 = "flask-app-repo"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+}
+
+# 3. Security Group
+resource "aws_security_group" "flask_sg" {
+  name        = "flask_sg"
+  description = "Allow HTTP and SSH traffic"
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 5000
+    to_port     = 5000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# 4. Build and Push Docker Image
 resource "null_resource" "docker_build_push" {
   triggers = {
     always_run = "\${timestamp()}"
@@ -2244,6 +2245,7 @@ resource "null_resource" "docker_build_push" {
   }
 }
 
+# 5. EC2 Instance
 resource "aws_instance" "app_server" {
   ami                  = "ami-0cff7528ff583bf9a"
   instance_type        = "t2.micro"
